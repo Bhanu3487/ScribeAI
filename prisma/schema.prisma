@@ -1,0 +1,62 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  sessions  Session[]
+  createdAt DateTime  @default(now())
+}
+
+model Session {
+  id            String             @id @default(cuid())
+  userId        String
+  user          User               @relation(fields: [userId], references: [id])
+  title         String?
+  status        SessionStatus      @default(RECORDING)
+  startTime     DateTime           @default(now())
+  endTime       DateTime?
+  chunks        TranscriptChunk[]
+  fullTranscript FullTranscript?
+  summary       Summary?
+}
+
+model TranscriptChunk {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id])
+  text       String
+  timestamp  DateTime @default(now())
+}
+
+model FullTranscript {
+  id         String   @id @default(cuid())
+  sessionId  String   @unique
+  session    Session  @relation(fields: [sessionId], references: [id])
+  text       String
+  createdAt  DateTime @default(now())
+}
+
+model Summary {
+  id         String   @id @default(cuid())
+  sessionId  String   @unique
+  session    Session  @relation(fields: [sessionId], references: [id])
+  text       String
+  createdAt  DateTime @default(now())
+}
+
+enum SessionStatus {
+  RECORDING
+  PAUSED
+  PROCESSING
+  COMPLETED
+}
