@@ -1,4 +1,3 @@
-// src/app/api/session/stop/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
@@ -14,9 +13,12 @@ export async function POST(req: Request) {
     where: { id: sessionId },
     data: {
       endTime: new Date(),
-      status: "COMPLETED", // Common alternative to PROCESSING
+      status: "PROCESSING", // Match your enum
     },
   });
 
-  return NextResponse.json({ sessionId: updated.id, status: updated.status });
+  return NextResponse.json({ 
+    sessionId: updated.id, 
+    status: updated.status 
+  });
 }
