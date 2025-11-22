@@ -35,6 +35,7 @@ model TranscriptChunk {
   sessionId  String
   session    Session  @relation(fields: [sessionId], references: [id])
   text       String
+  audioData  String?  @db.Text  // Added for storing base64 audio
   timestamp  DateTime @default(now())
 }
 
