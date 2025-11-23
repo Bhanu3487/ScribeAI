@@ -3,62 +3,72 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { generateSummary } from '@/lib/gemini';
 
+/**
+ * POST /api/session/summary
+ * Generate (or return existing) a summary for a session's transcript.
+ *
+ * Request JSON body: { sessionId: string }
+ * Response: { summary: string }
+ *
+ * Returns 400 if `sessionId` is missing, 404 if no transcript chunks found,
+ * and 500 for internal errors.
+ */
 export async function POST(req: Request) {
   try {
     const { sessionId } = await req.json();
-    
+
     if (!sessionId) {
       return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
     }
-    
+
     // Check if summary already exists
     const existingSummary = await prisma.summary.findUnique({
-      where: { sessionId }
+      where: { sessionId },
     });
-    
+
     if (existingSummary) {
       return NextResponse.json({ summary: existingSummary.text });
     }
-    
+
     // Get all chunks
     const chunks = await prisma.transcriptChunk.findMany({
       where: { sessionId },
-      orderBy: { timestamp: 'asc' }
+      orderBy: { timestamp: 'asc' },
     });
-    
+
     if (chunks.length === 0) {
       return NextResponse.json({ error: 'No transcript chunks found' }, { status: 404 });
     }
-    
+
     // Combine all transcriptions
-    const fullText = chunks.map(c => c.text).join(' ');
-    
+    const fullText = chunks.map((c) => c.text).join(' ');
+
     console.log('Generating summary for transcript:', fullText.substring(0, 100));
-    
+
     // Generate summary with Gemini
     const summaryText = await generateSummary(fullText);
-    
+
     console.log('Summary generated:', summaryText);
-    
+
     // Save summary
     const summary = await prisma.summary.create({
       data: {
         sessionId,
-        text: summaryText
-      }
+        text: summaryText,
+      },
     });
-    
+
     // Update session status
     await prisma.session.update({
       where: { id: sessionId },
-      data: { 
+      data: {
         status: 'COMPLETED',
-        endTime: new Date()
-      }
+        endTime: new Date(),
+      },
     });
-    
+
     return NextResponse.json({ summary: summary.text });
-    
+
   } catch (error) {
     console.error('Summary error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

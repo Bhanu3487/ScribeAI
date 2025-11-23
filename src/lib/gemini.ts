@@ -1,6 +1,12 @@
 // src/lib/gemini.ts
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
+/**
+ * Get Gemini API key from environment.
+ * Throws an Error if the key is not present so callers can handle it.
+ * @returns {string} The Gemini API key from `process.env.GEMINI_API_KEY`.
+ * @throws {Error} When the environment variable is missing.
+ */
 function getApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
@@ -9,11 +15,25 @@ function getApiKey(): string {
   return key;
 }
 
+/**
+ * Create a new GoogleGenerativeAI client using the API key.
+ * This is created on-demand to avoid throwing at module import time
+ * (useful for server environments and tests).
+ * @returns {GoogleGenerativeAI} A configured Gemini client instance.
+ */
 function createGenAI() {
   const key = getApiKey();
   return new GoogleGenerativeAI(key);
 }
 
+/**
+ * Transcribe an audio payload using the Gemini generative model.
+ * The audio must be provided as a base64-encoded string.
+ * @param {string} base64Audio - Base64-encoded audio data.
+ * @param {string} [mimeType='audio/wav'] - MIME type describing the audio format.
+ * @returns {Promise<string>} The transcribed text.
+ * @throws {Error} If transcription fails or the API key is missing.
+ */
 export async function transcribeAudio(
   base64Audio: string,
   mimeType: string = 'audio/wav'
@@ -44,6 +64,14 @@ export async function transcribeAudio(
   }
 }
 
+/**
+ * Generate a concise summary for a full transcript using Gemini.
+ * The function composes a prompt that asks for a main topic, key points,
+ * and action items and returns the model's text output.
+ * @param {string} fullTranscript - The combined transcript text to summarize.
+ * @returns {Promise<string>} The generated summary text.
+ * @throws {Error} If summary generation fails or the API key is missing.
+ */
 export async function generateSummary(fullTranscript: string): Promise<string> {
   try {
     const genAI = createGenAI();

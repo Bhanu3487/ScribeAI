@@ -2,6 +2,15 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+/**
+ * POST /api/auth/mock-login
+ * Create or return a test user by email. Intended for local/dev auth mocking.
+ *
+ * Request JSON body: { email: string }
+ * Response: { userId: string }
+ *
+ * Returns 400 if `email` is not provided.
+ */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const email = body?.email;
@@ -13,7 +22,7 @@ export async function POST(req: Request) {
 
   // Check if user already exists
   let user = await prisma.user.findUnique({
-    where: { email }
+    where: { email },
   });
 
   // If not, create new user

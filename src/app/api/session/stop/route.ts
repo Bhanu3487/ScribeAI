@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
+/**
+ * POST /api/session/stop
+ * Mark a session as stopped/processing and set its end time.
+ *
+ * Request JSON body: { sessionId: string }
+ * Response: { sessionId: string, status: string }
+ *
+ * Returns 400 if `sessionId` is missing.
+ */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const sessionId = body?.sessionId;
@@ -17,8 +26,8 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json({ 
-    sessionId: updated.id, 
-    status: updated.status 
+  return NextResponse.json({
+    sessionId: updated.id,
+    status: updated.status,
   });
 }
