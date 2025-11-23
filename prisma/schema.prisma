@@ -31,12 +31,12 @@ model Session {
 }
 
 model TranscriptChunk {
-  id         String   @id @default(cuid())
-  sessionId  String
-  session    Session  @relation(fields: [sessionId], references: [id])
-  text       String
-  audioData  String?  @db.Text  // Added for storing base64 audio
-  timestamp  DateTime @default(now())
+  id                 String   @id @default(cuid())
+  sessionId          String
+  session            Session  @relation(fields: [sessionId], references: [id])
+  text               String
+  sequence           Int?     // client-supplied sequence number (0,1,2...)
+  timestamp          DateTime @default(now())
 }
 
 model FullTranscript {
