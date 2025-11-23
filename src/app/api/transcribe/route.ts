@@ -31,18 +31,22 @@ export async function POST(req: Request) {
       );
     }
 
-    // Convert to base64
+    // Convert to base64 (used only transiently for transcription)
     const arrayBuffer = await audioFile.arrayBuffer();
     const base64Audio = Buffer.from(arrayBuffer).toString('base64');
 
-    console.log('Received audio:', audioFile.size, 'bytes, type:', audioFile.type);
+    // Parse optional metadata from the form
+    const sequenceRaw = formData.get('sequence');
+    const sequence = sequenceRaw ? parseInt(String(sequenceRaw), 10) : undefined;
 
-    // Save chunk first
+    console.log('Received audio:', audioFile.size, 'bytes, type:', audioFile.type, 'sequence:', sequence);
+
+    // Save chunk
     const chunk = await prisma.transcriptChunk.create({
       data: {
         sessionId,
         text: 'Transcribing...',
-        audioData: base64Audio,
+        sequence: sequence ?? undefined,
       },
     });
 
