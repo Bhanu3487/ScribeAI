@@ -1,5 +1,7 @@
+// src/app/api/session/summary/route.ts
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { generateSummary } from '@/lib/gemini';
 
 export async function POST(req: Request) {
   try {
@@ -8,14 +10,6 @@ export async function POST(req: Request) {
     if (!sessionId) {
       return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
     }
-    
-    // Get all chunks
-    const chunks = await prisma.transcriptChunk.findMany({
-      where: { sessionId },
-      orderBy: { timestamp: 'asc' }
-    });
-    
-    const fullText = chunks.map(c => c.text).join(' ');
     
     // Check if summary already exists
     const existingSummary = await prisma.summary.findUnique({
@@ -26,8 +20,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ summary: existingSummary.text });
     }
     
-    // Create mock summary
-    const summaryText = `Mock Summary: Analyzed ${chunks.length} audio chunk(s). Gemini integration coming next.`;
+    // Get all chunks
+    const chunks = await prisma.transcriptChunk.findMany({
+      where: { sessionId },
+      orderBy: { timestamp: 'asc' }
+    });
+    
+    if (chunks.length === 0) {
+      return NextResponse.json({ error: 'No transcript chunks found' }, { status: 404 });
+    }
+    
+    // Combine all transcriptions
+    const fullText = chunks.map(c => c.text).join(' ');
+    
+    console.log('Generating summary for transcript:', fullText.substring(0, 100));
+    
+    // Generate summary with Gemini
+    const summaryText = await generateSummary(fullText);
+    
+    console.log('Summary generated:', summaryText);
     
     // Save summary
     const summary = await prisma.summary.create({

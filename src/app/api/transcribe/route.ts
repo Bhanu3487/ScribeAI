@@ -1,5 +1,7 @@
+// src/app/api/transcribe/route.ts
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { transcribeAudio } from '@/lib/gemini';
 
 export async function POST(req: Request) {
   try {
@@ -18,28 +20,35 @@ export async function POST(req: Request) {
     const arrayBuffer = await audioFile.arrayBuffer();
     const base64Audio = Buffer.from(arrayBuffer).toString('base64');
     
-    console.log('Received audio:', audioFile.size, 'bytes');
+    console.log('Received audio:', audioFile.size, 'bytes, type:', audioFile.type);
     
-    // Save chunk with matching schema fields
+    // Save chunk first
     const chunk = await prisma.transcriptChunk.create({
       data: {
         sessionId,
-        text: 'Transcription pending...', // Required field
-        audioData: base64Audio, // Optional field we just added
+        text: 'Transcribing...',
+        audioData: base64Audio,
       }
     });
     
-    console.log('Saved chunk:', chunk.id);
+    // Transcribe with correct MIME type
+    const transcription = await transcribeAudio(base64Audio, audioFile.type);
+    
+    // Update chunk
+    await prisma.transcriptChunk.update({
+      where: { id: chunk.id },
+      data: { text: transcription }
+    });
     
     return NextResponse.json({ 
       chunkId: chunk.id,
-      transcription: 'Mock transcription: Audio received successfully! Gemini integration coming next.',
+      transcription: transcription,
     });
     
   } catch (error) {
     console.error('Transcribe error:', error);
     return NextResponse.json(
-      { error: error.message },
+      { error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
