@@ -20,15 +20,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "email is required" }, { status: 400 });
   }
 
-  // Check if user already exists
-  let user = await prisma.user.findUnique({
-    where: { email },
-  });
+  try {
+    // Check if user already exists
+    let user = await prisma.user.findUnique({ where: { email } });
 
-  // If not, create new user
-  if (!user) {
-    user = await prisma.user.create({ data: { email } });
+    // If not, create new user
+    if (!user) {
+      user = await prisma.user.create({ data: { email } });
+    }
+
+    return NextResponse.json({ userId: user.id });
+  } catch (err) {
+    // Log full error server-side for debugging
+    console.error('mock-login error:', err);
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: 'Failed to create/login user', detail: message }, { status: 500 });
   }
-
-  return NextResponse.json({ userId: user.id });
 }

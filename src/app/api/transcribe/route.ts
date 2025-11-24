@@ -3,6 +3,9 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { transcribeAudio } from '@/lib/gemini';
 
+// Simple in-memory per-session transcription queue to serialize calls
+const sessionQueues: Map<string, Promise<any>> = new Map();
+
 /**
  * POST /api/transcribe
  * Accepts multipart/form-data with fields:
@@ -38,8 +41,25 @@ export async function POST(req: Request) {
     // Parse optional metadata from the form
     const sequenceRaw = formData.get('sequence');
     const sequence = sequenceRaw ? parseInt(String(sequenceRaw), 10) : undefined;
+    const recorderRaw = formData.get('recorder');
+    const recorder = recorderRaw ? parseInt(String(recorderRaw), 10) : undefined;
 
-    console.log('Received audio:', audioFile.size, 'bytes, type:', audioFile.type, 'sequence:', sequence);
+    console.log('Received audio:', audioFile.size, 'bytes, type:', audioFile.type, 'sequence:', sequence, 'recorder:', recorder);
+    // Log base64 length (not full data) for debugging
+    console.log('Base64 length:', base64Audio.length);
+    // In development, write the raw uploaded file to /tmp for inspection
+    try {
+      if (process.env.NODE_ENV !== 'production') {
+        const fs = await import('fs');
+        const path = await import('path');
+        const ext = audioFile.type && audioFile.type.includes('webm') ? 'webm' : 'wav';
+        const filename = path.join('/tmp', `scribe_${sessionId || 'nosession'}_seq${sequence ?? 'nos'}_rec${recorder ?? 'norec'}.${ext}`);
+        fs.writeFileSync(filename, Buffer.from(arrayBuffer));
+        console.log('Wrote debug audio file to', filename, 'size', Buffer.from(arrayBuffer).length);
+      }
+    } catch (err) {
+      console.error('Failed to write debug audio file:', err);
+    }
 
     // Save chunk
     const chunk = await prisma.transcriptChunk.create({
@@ -51,7 +71,36 @@ export async function POST(req: Request) {
     });
 
     // Transcribe with correct MIME type
-    const transcription = await transcribeAudio(base64Audio, audioFile.type);
+    console.log(`Calling transcribeAudio for sequence=${sequence}, mime=${audioFile.type}`);
+
+    // Enqueue transcription for this session to avoid concurrent Gemini calls
+    const sessionKey = sessionId || 'no-session';
+    const prev = sessionQueues.get(sessionKey) ?? Promise.resolve();
+
+    const current = prev.then(async () => {
+      console.log(`Starting transcription for session=${sessionKey} sequence=${sequence}`);
+      const txt = await transcribeAudio(base64Audio, audioFile.type);
+      console.log(`Finished transcription for session=${sessionKey} sequence=${sequence}`);
+      return txt;
+    }).catch((err) => {
+      console.error('Error in queued transcription:', err);
+      throw err;
+    });
+
+    // Store current promise as the queue tail
+    sessionQueues.set(sessionKey, current);
+
+    // Await the current transcription result
+    const transcription = await current;
+    console.log(`Transcription result for sequence=${sequence}:`, typeof transcription === 'string' ? `${transcription.substring(0, 80)}...` : transcription);
+
+    // Clean up queue map if this is the last task
+    current.finally(() => {
+      const tail = sessionQueues.get(sessionKey);
+      if (tail === current) {
+        sessionQueues.delete(sessionKey);
+      }
+    });
 
     // Update chunk
     await prisma.transcriptChunk.update({
