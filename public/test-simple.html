@@ -70,25 +70,97 @@
 </head>
 
 <body>
-  <h1>🎙️ 5-Second Audio Test</h1>
+  <h1>🎙️ Continuous Chunked Recording Test</h1>
   <button id="record">🔴 Start Recording</button>
   <div class="timer" id="timer"></div>
   <div id="status">Ready - Click button to start</div>
+  <div id="transcriptionSlot"
+    style="margin-top:12px; padding:12px; background:#fff; border-left:4px solid #4CAF50; min-height:48px; font-size:16px;">
+    .</div>
+  <div id="statusLine" style="margin-top:8px; color:#666; font-size:13px">Idle</div>
   <!-- playback removed: recordings are not shown or played back in the UI -->
 
   <script>
-    let mediaRecorder;
-    let audioChunks = [];
+    let recorders = [null, null];
+    let activeRecorder = 0; // index of recorder currently considered active (0 or 1)
     let sessionId;
     let userId;
-    let countdown;
+    let sequence = 0;
+    let chunkMs = 5000; // default chunk duration in ms (5s).
+    let isRecording = false;
 
     const recordBtn = document.getElementById('record');
     const statusDiv = document.getElementById('status');
     const timerDiv = document.getElementById('timer');
+
     // playback element removed — we don't display or play recorded audio
 
     recordBtn.onclick = async () => {
+      // Toggle start/stop
+      if (isRecording) {
+        // Stop the overlapping recording loop
+        isRecording = false;
+        statusDiv.textContent = 'Stopping...';
+        recordBtn.classList.remove('recording');
+        recordBtn.textContent = '🔴 Start Recording';
+
+        // Stop all timers and running recorders
+        try {
+          // clear any interval handles stored on the button for simplicity
+          if (recordBtn._intervalHandle) {
+            clearInterval(recordBtn._intervalHandle);
+            recordBtn._intervalHandle = null;
+          }
+          if (recordBtn._stopTimers) {
+            recordBtn._stopTimers.forEach((t) => t && clearTimeout(t));
+            recordBtn._stopTimers = null;
+          }
+
+          for (let i = 0; i < recorders.length; i++) {
+            const r = recorders[i];
+            if (r && r.state === 'recording') {
+              try { r.stop(); } catch (e) { console.warn('Error stopping recorder', i, e); }
+            }
+          }
+        } catch (err) {
+          console.warn('Error while stopping recorders:', err);
+        }
+
+        // Notify server to stop session
+        try {
+          await fetch('http://localhost:3000/api/session/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId })
+          });
+
+          // Request summary
+          const summaryRes = await fetch('http://localhost:3000/api/session/summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId })
+          });
+
+          if (summaryRes.ok) {
+            const summaryData = await summaryRes.json();
+            statusDiv.innerHTML = `<strong>📝 AI Summary:</strong><br><div style="font-size:14px; margin-top:10px; padding:10px; background:white; border-left:4px solid #2196F3;">${summaryData.summary}</div>`;
+          } else {
+            statusDiv.textContent = 'Stopped. Summary not ready.';
+          }
+        } catch (err) {
+          console.error('Error stopping session:', err);
+          statusDiv.textContent = 'Stopped (error notifying server)';
+        }
+
+        // Reset state
+        recorders = [null, null];
+        activeRecorder = 0;
+        sessionId = null;
+        sequence = 0;
+        return;
+      }
+
+      // Start recording
       try {
         recordBtn.disabled = true;
         statusDiv.textContent = 'Setting up...';
@@ -100,13 +172,9 @@
           body: JSON.stringify({ email: 'test@scribeai.com' })
         });
 
-        if (!userRes.ok) {
-          throw new Error('Failed to create user');
-        }
-
+        if (!userRes.ok) throw new Error('Failed to create user');
         const userData = await userRes.json();
         userId = userData.userId;
-        console.log('User ID:', userId);
 
         // 2. Create session
         const sessionRes = await fetch('http://localhost:3000/api/session/start', {
@@ -115,121 +183,133 @@
           body: JSON.stringify({ userId })
         });
 
-        if (!sessionRes.ok) {
-          throw new Error('Failed to start session');
-        }
-
+        if (!sessionRes.ok) throw new Error('Failed to start session');
         const sessionData = await sessionRes.json();
         sessionId = sessionData.sessionId;
-        console.log('Session ID:', sessionId);
 
         // 3. Get microphone access
         statusDiv.textContent = 'Requesting microphone access...';
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        // 4. Setup recorder
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
+        // 4. Prepare two recorders but use overlapping/staggered start to avoid warmup issues
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
 
-        mediaRecorder.ondataavailable = (event) => {
-          audioChunks.push(event.data);
-        };
+        function makeRecorder(idx) {
+          const r = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
 
-        mediaRecorder.onstop = async () => {
-          // Stop visual indicators
-          recordBtn.classList.remove('recording');
-          recordBtn.textContent = '🔴 Start Recording';
-          timerDiv.textContent = '';
+          r.ondataavailable = async (event) => {
+            if (!event.data || event.data.size === 0) return;
+            const chunkBlob = event.data;
+            const currentSeq = sequence++;
 
-          // Create audio blob
-          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const statusLine = document.getElementById('statusLine');
+            const transcriptionSlot = document.getElementById('transcriptionSlot');
+            statusLine.textContent = `Uploading/transcribing chunk ${currentSeq}...`;
 
-          // Recording saved but not displayed or played back (UI intentionally silent)
+            const formData = new FormData();
+            const ext = chunkBlob.type && chunkBlob.type.includes('webm') ? 'webm' : 'wav';
+            formData.append('audio', chunkBlob, `chunk-${currentSeq}.${ext}`);
+            formData.append('sessionId', sessionId);
+            formData.append('sequence', String(currentSeq));
 
-          // Upload and transcribe
-          statusDiv.innerHTML = '⏳ Uploading and transcribing...';
+            try {
+              console.log(`Uploading chunk ${currentSeq} from recorder ${idx}`, { size: chunkBlob.size, type: chunkBlob.type });
+              const uploadRes = await fetch('http://localhost:3000/api/transcribe', {
+                method: 'POST',
+                body: formData
+              });
 
-          const formData = new FormData();
-          formData.append('audio', audioBlob, 'recording.wav');
-          formData.append('sessionId', sessionId);
+              if (!uploadRes.ok) {
+                const text = await uploadRes.text();
+                console.error('Chunk upload failed:', text);
+                statusLine.textContent = `Chunk ${currentSeq} upload failed`;
+                return;
+              }
 
+              const result = await uploadRes.json();
+              console.log(`Chunk ${currentSeq} transcription result:`, result);
+
+              transcriptionSlot.textContent = result.transcription || '.';
+              statusLine.textContent = `Chunk ${currentSeq} transcribed`;
+            } catch (err) {
+              console.error('Error uploading chunk:', err);
+              statusLine.textContent = `Chunk ${currentSeq} error`;
+            }
+          };
+
+          r.onerror = (e) => {
+            console.error('MediaRecorder error (recorder', idx, '):', e);
+            const statusLine = document.getElementById('statusLine');
+            statusLine.textContent = `Recorder ${idx} error`;
+          };
+
+          r.onstart = () => {
+            recordBtn.classList.add('recording');
+            recordBtn.textContent = '⏺️ Recording (click to stop)';
+            statusDiv.textContent = `Recording (recorder ${idx})...`;
+            recordBtn.disabled = false;
+          };
+
+          return r;
+        }
+
+        // instantiate both recorders
+        recorders[0] = makeRecorder(0);
+        recorders[1] = makeRecorder(1);
+
+        // overlap configuration
+        const overlapMs = 800; // how much overlap between recorders (tweakable)
+        const staggerMs = Math.max(100, chunkMs - overlapMs);
+
+        // storage for timers so we can clear them on stop
+        recordBtn._stopTimers = [null, null];
+
+        function startRecorderOnce(idx) {
           try {
-            const uploadRes = await fetch('http://localhost:3000/api/transcribe', {
-              method: 'POST',
-              body: formData
-            });
+            if (!recorders[idx]) recorders[idx] = makeRecorder(idx);
+            recorders[idx].start();
+          } catch (e) {
+            console.error('Failed to start recorder', idx, e);
+            return;
+          }
 
-            if (!uploadRes.ok) {
-              throw new Error('Upload failed');
+          // schedule stop after chunkMs
+          if (recordBtn._stopTimers[idx]) clearTimeout(recordBtn._stopTimers[idx]);
+          recordBtn._stopTimers[idx] = setTimeout(() => {
+            try {
+              if (recorders[idx] && recorders[idx].state === 'recording') recorders[idx].stop();
+            } catch (err) {
+              console.warn('Error stopping recorder', idx, err);
             }
+            recordBtn._stopTimers[idx] = null;
+          }, chunkMs);
+        }
 
-            const result = await uploadRes.json();
+        // start the overlapping alternation loop
+        (function beginOverlapLoop() {
+          isRecording = true;
+          // start recorder 0 immediately
+          startRecorderOnce(0);
 
-            statusDiv.innerHTML = `
-              <strong>✅ Transcription:</strong><br>
-              <div style="font-size: 16px; margin-top: 10px; padding: 10px; background: white; border-left: 4px solid #4CAF50;">
-                ${result.transcription}
-              </div>
-            `;
+          // schedule repeated starts for the other recorder every staggerMs
+          recordBtn._intervalHandle = setInterval(() => {
+            // determine next recorder index (alternate)
+            const nextIdx = (Date.now() / staggerMs) % 2 < 1 ? 1 : 0;
+            // start it overlapping
+            startRecorderOnce(nextIdx);
+            // flip activeRecorder for bookkeeping
+            activeRecorder = nextIdx;
+          }, staggerMs);
+        })();
 
-            // Get summary
-            const summaryRes = await fetch('http://localhost:3000/api/session/summary', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId })
-            });
-
-            if (summaryRes.ok) {
-              const summaryData = await summaryRes.json();
-              statusDiv.innerHTML += `
-                <br><strong>📝 AI Summary:</strong><br>
-                <div style="font-size: 14px; margin-top: 10px; padding: 10px; background: white; border-left: 4px solid #2196F3;">
-                  ${summaryData.summary}
-                </div>
-              `;
-            }
-
-            recordBtn.disabled = false;
-          } catch (error) {
-            statusDiv.innerHTML = `<strong>❌ Error:</strong> ${error.message}`;
-            recordBtn.disabled = false;
-          }
-        };
-
-        // 5. Start recording
-        mediaRecorder.start();
-        recordBtn.classList.add('recording');
-        recordBtn.textContent = '⏺️ Recording...';
-        statusDiv.textContent = '🎙️ Recording in progress - Speak clearly!';
-
-        // Countdown timer
-        let secondsLeft = 5;
-        timerDiv.textContent = `${secondsLeft}s`;
-
-        countdown = setInterval(() => {
-          secondsLeft--;
-          timerDiv.textContent = `${secondsLeft}s`;
-
-          if (secondsLeft <= 0) {
-            clearInterval(countdown);
-            timerDiv.textContent = '';
-          }
-        }, 1000);
-
-        // 6. Auto-stop after 5 seconds
-        setTimeout(() => {
-          if (mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-            stream.getTracks().forEach(track => track.stop());
-          }
-        }, 5000);
-
+        // done setup
+        recordBtn.disabled = false;
       } catch (error) {
-        console.error('Error:', error);
+        console.error('Error starting recording:', error);
         statusDiv.innerHTML = `<strong>❌ Error:</strong> ${error.message}`;
         recordBtn.disabled = false;
-        recordBtn.classList.remove('recording');
-        timerDiv.textContent = '';
       }
     };
   </script>
