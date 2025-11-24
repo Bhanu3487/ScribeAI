@@ -37,6 +37,7 @@ model TranscriptChunk {
   session            Session  @relation(fields: [sessionId], references: [id])
   text               String
   sequence           Int?     // client-supplied sequence number (0,1,2...)
+  diarization        Json?
   timestamp          DateTime @default(now())
 }
 
