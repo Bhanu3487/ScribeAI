@@ -42,25 +42,93 @@ export async function transcribeAudio(
     const genAI = createGenAI();
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: mimeType,
-          data: base64Audio,
-        },
-      },
-      {
-        text: 'Transcribe this audio exactly as spoken. Output only the transcribed text, nothing else.',
-      },
-    ]);
+    console.log('Gemini: sending audio for transcription. mimeType:', mimeType, 'base64 length:', base64Audio.length);
 
-    const response = await result.response;
-    return response.text();
+    // Retry logic for transient errors (e.g., 503 Service Unavailable)
+    const maxAttempts = 4;
+    const baseDelayMs = 1000; // initial backoff
+
+    function sleep(ms: number) {
+      return new Promise((res) => setTimeout(res, ms));
+    }
+
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await model.generateContent([
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Audio,
+            },
+          },
+          {
+            text: 'Transcribe this audio exactly as spoken. Output only the transcribed text, nothing else.',
+          },
+        ]);
+
+        const response = await result.response;
+        const text = await response.text();
+        console.log('Gemini response (preview):', (text && text.length) ? `${text.substring(0, 200)}...` : '<empty>');
+        return text;
+      } catch (err: any) {
+        lastErr = err;
+        const isTransient = err && (err.status === 503 || (err.message && /503|Service Unavailable/i.test(err.message)));
+        console.warn(`Gemini attempt ${attempt} failed${isTransient ? ' (transient)' : ''}:`, err && err.message ? err.message : err);
+
+        if (attempt < maxAttempts && isTransient) {
+          // exponential backoff with jitter
+          const backoff = baseDelayMs * Math.pow(2, attempt - 1);
+          const jitter = Math.floor(Math.random() * 300);
+          const waitMs = backoff + jitter;
+          console.log(`Retrying Gemini in ${waitMs}ms (attempt ${attempt + 1}/${maxAttempts})`);
+          await sleep(waitMs);
+          continue;
+        }
+
+        // If not transient or out of attempts, rethrow after loop
+        break;
+      }
+    }
+
+    // If we reach here, all attempts failed
+    // Log full error details (including non-enumerable props) to aid debugging
+    try {
+      console.error('Gemini transcription failed after retries:', JSON.stringify(lastErr, Object.getOwnPropertyNames(lastErr)));
+    } catch (e) {
+      console.error('Gemini transcription failed after retries (could not stringify):', lastErr);
+    }
+
+    throw lastErr;
   } catch (error) {
-    console.error('Gemini transcription error:', error);
+    console.error('Gemini transcription error (outer):', error);
     throw new Error(
       `Transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
+  }
+}
+
+/**
+ * Perform a lightweight health check against the Gemini model by making a small text-only request.
+ * Returns an object with `ok: boolean` and `detail` containing either the response text or the error.
+ */
+export async function checkGemini(): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const genAI = createGenAI();
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const prompt = 'Say "hello" briefly.';
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
+    return { ok: true, detail: text };
+  } catch (err: any) {
+    try {
+      console.error('Gemini healthcheck error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+    } catch (e) {
+      console.error('Gemini healthcheck error (raw):', err);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, detail: message };
   }
 }
 
