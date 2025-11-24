@@ -25,6 +25,7 @@ model Session {
   status        SessionStatus      @default(RECORDING)
   startTime     DateTime           @default(now())
   endTime       DateTime?
+  // Relation back to transcript chunks (aggregated chunks stored here)
   chunks        TranscriptChunk[]
   fullTranscript FullTranscript?
   summary       Summary?
