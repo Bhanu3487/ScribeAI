@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       sessionId: session.id,
       status: session.status,
       lastChunkSeq: finalSequence,
-      message: 'Session stopped. Processing will begin once all chunks are transcribed.',
+      message: 'Session stopped. Summary will be generated automatically.',
     });
 
   } catch (error) {

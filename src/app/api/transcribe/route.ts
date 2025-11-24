@@ -98,7 +98,7 @@ export async function POST(req: Request) {
     const lastChunkSeq = getLastChunkSequence(sessionId);
     
     if (lastChunkSeq !== undefined && sequence !== undefined && sequence >= lastChunkSeq) {
-      console.log(`Last chunk (${sequence}) transcribed for session ${sessionId}. Checking if ready for summary...`);
+      console.log(`✓ Last chunk (${sequence}) transcribed for session ${sessionId}`);
       
       // Check if session is PROCESSING and doesn't have a full transcript yet
       const session = await prisma.session.findUnique({
@@ -110,16 +110,28 @@ export async function POST(req: Request) {
       });
 
       if (session?.status === 'PROCESSING' && !session.fullTranscript) {
-        console.log(`Triggering summary generation for session ${sessionId}...`);
+        console.log(`🚀 Auto-triggering summary generation for session ${sessionId}...`);
         
-        // Trigger summary generation asynchronously (don't wait for it)
-        fetch(`http://localhost:${process.env.PORT || 3000}/api/session/summary`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        }).catch(err => {
-          console.error('Error triggering summary generation:', err);
-        });
+        // Trigger summary generation asynchronously in the background
+        // This runs independently and doesn't block the response
+        (async () => {
+          try {
+            const response = await fetch(`http://localhost:${process.env.PORT || 3000}/api/session/summary`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId }),
+            });
+            
+            if (response.ok) {
+              console.log(`✓ Summary generation completed for session ${sessionId}`);
+            } else {
+              const error = await response.text();
+              console.error(`✗ Summary generation failed for session ${sessionId}:`, error);
+            }
+          } catch (err) {
+            console.error(`✗ Error triggering summary for session ${sessionId}:`, err);
+          }
+        })();
       }
     }
 
